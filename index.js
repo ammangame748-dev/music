@@ -245,12 +245,24 @@ async function playNext(guildId) {
       });
     }
 
-    const youtubeStream = await youtubeClient.download(queue.current.id || queue.current.url, {
-      type: 'audio',
-      quality: 'best',
-      format: 'mp4',
-      client: 'YTMUSIC'
-    });
+    let youtubeStream;
+    let lastYoutubeError;
+    for (const clientType of ['WEB', 'ANDROID']) {
+      try {
+        youtubeStream = await youtubeClient.download(queue.current.id || queue.current.url, {
+          type: 'audio',
+          quality: 'best',
+          format: 'mp4',
+          client: clientType
+        });
+        console.log(`YouTube stream opened with ${clientType}.`);
+        break;
+      } catch (error) {
+        lastYoutubeError = error;
+        console.warn(`YouTube ${clientType} client failed: ${error.message}`);
+      }
+    }
+    if (!youtubeStream) throw lastYoutubeError || new Error('تعذر فتح بث يوتيوب');
 
     const ffmpeg = spawn(ffmpegPath, [
       '-hide_banner', '-loglevel', 'error',
