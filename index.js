@@ -28,6 +28,8 @@ const {
 const play = require('play-dl');
 const ffmpegPath = require('ffmpeg-static');
 const { spawn } = require('child_process');
+const { Readable } = require('stream');
+const { Innertube, UniversalCache } = require('youtubei.js');
 
 const TOKEN = process.env.DISCORD_TOKEN;
 const CLIENT_ID = process.env.CLIENT_ID;
@@ -48,6 +50,7 @@ const client = new Client({
 
 const queues = new Map();
 const searchCache = new Map();
+let youtubeClient = null;
 
 const commands = [
   new SlashCommandBuilder()
@@ -153,6 +156,7 @@ async function findSongs(query, limit = 1) {
     const details = info.video_details;
     return [{
       title: details.title,
+      id: details.id,
       url: details.url || query,
       duration: details.durationRaw || 'غير معروف',
       channel: details.channel?.name || 'YouTube',
@@ -167,6 +171,7 @@ async function findSongs(query, limit = 1) {
   });
 
   return results.map(video => ({
+    id: video.id,
     title: video.title,
     url: video.url,
     duration: video.durationRaw || 'غير معروف',
@@ -233,9 +238,29 @@ async function playNext(guildId) {
 
   queue.current = queue.songs.shift();
   try {
-    const stream = await play.stream(queue.current.url, { quality: 2, discordPlayerCompatibility: true });
-    const resource = createAudioResource(stream.stream, {
-      inputType: stream.type,
+    if (!youtubeClient) {
+      youtubeClient = await Innertube.create({
+        cache: new UniversalCache(false),
+        generate_session_locally: true
+      });
+    }
+
+    const youtubeStream = await youtubeClient.download(queue.current.id || queue.current.url, {
+      type: 'audio',
+      quality: 'best',
+      format: 'mp4',
+      client: 'YTMUSIC'
+    });
+
+    const ffmpeg = spawn(ffmpegPath, [
+      '-hide_banner', '-loglevel', 'error',
+      '-i', 'pipe:0',
+      '-f', 's16le', '-ar', '48000', '-ac', '2', 'pipe:1'
+    ], { stdio: ['pipe', 'pipe', 'ignore'] });
+
+    Readable.fromWeb(youtubeStream).pipe(ffmpeg.stdin);
+    const resource = createAudioResource(ffmpeg.stdout, {
+      inputType: 1,
       inlineVolume: true,
       metadata: { song: queue.current }
     });
@@ -277,6 +302,15 @@ async function registerCommands() {
 client.once('ready', async () => {
   console.log(`Logged in as ${client.user.tag}`);
   client.user.setActivity('/play اسم الأغنية', { type: 2 });
+  try {
+    youtubeClient = await Innertube.create({
+      cache: new UniversalCache(false),
+      generate_session_locally: true
+    });
+    console.log('YouTube client ready.');
+  } catch (error) {
+    console.error('YouTube client initialization failed:', error.message);
+  }
   try { await registerCommands(); } catch (error) { console.error('Command registration failed:', error.message); }
 });
 
