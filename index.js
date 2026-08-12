@@ -1,4 +1,5 @@
 require('dotenv').config();
+const http = require('http');
 
 const {
   Client,
@@ -405,5 +406,31 @@ client.on('interactionCreate', async interaction => {
 
 process.on('unhandledRejection', error => console.error('Unhandled rejection:', error));
 process.on('uncaughtException', error => console.error('Uncaught exception:', error));
+
+const PORT = Number(process.env.PORT) || 3000;
+
+const server = http.createServer((req, res) => {
+  const path = (req.url || '/').split('?')[0];
+  res.setHeader('Content-Type', 'application/json; charset=utf-8');
+
+  if (path === '/' || path === '/health') {
+    const payload = {
+      ok: true,
+      service: 'Naghma Music Bot',
+      botReady: client.isReady(),
+      uptime: Math.floor(process.uptime()),
+      time: new Date().toISOString()
+    };
+    res.writeHead(200);
+    return res.end(JSON.stringify(payload));
+  }
+
+  res.writeHead(404);
+  return res.end(JSON.stringify({ ok: false, error: 'Not found' }));
+});
+
+server.listen(PORT, '0.0.0.0', () => {
+  console.log(`Health server listening on port ${PORT}`);
+});
 
 client.login(TOKEN);
