@@ -29,7 +29,8 @@ const play = require('play-dl');
 const ffmpegPath = require('ffmpeg-static');
 const { spawn } = require('child_process');
 const { Readable } = require('stream');
-const { Innertube, UniversalCache } = require('youtubei.js');
+const SoundcloudModule = require('soundcloud.ts');
+const Soundcloud = SoundcloudModule.default || SoundcloudModule;
 
 const TOKEN = process.env.DISCORD_TOKEN;
 const CLIENT_ID = process.env.CLIENT_ID;
@@ -50,7 +51,10 @@ const client = new Client({
 
 const queues = new Map();
 const searchCache = new Map();
-let youtubeClient = null;
+const soundcloud = new Soundcloud(
+  process.env.SOUNDCLOUD_CLIENT_ID,
+  process.env.SOUNDCLOUD_OAUTH_TOKEN
+);
 
 const commands = [
   new SlashCommandBuilder()
@@ -150,35 +154,35 @@ function isYouTubeUrl(value) {
   return /^https?:\/\/(www\.)?(youtube\.com|youtu\.be)\//i.test(value);
 }
 
+function formatDuration(milliseconds) {
+  const totalSeconds = Math.max(0, Math.floor(Number(milliseconds || 0) / 1000));
+  const minutes = Math.floor(totalSeconds / 60);
+  const seconds = String(totalSeconds % 60).padStart(2, '0');
+  return `${minutes}:${seconds}`;
+}
+
+function normalizeSoundcloudTrack(track) {
+  return {
+    id: track.id,
+    title: track.title,
+    url: track.permalink_url,
+    duration: formatDuration(track.duration),
+    channel: track.user?.username || 'SoundCloud',
+    thumbnail: track.artwork_url || track.user?.avatar_url || null,
+    requestedBy: 'عضو',
+    source: 'SoundCloud'
+  };
+}
+
 async function findSongs(query, limit = 1) {
-  if (isYouTubeUrl(query)) {
-    const info = await play.video_info(query);
-    const details = info.video_details;
-    return [{
-      title: details.title,
-      id: details.id,
-      url: details.url || query,
-      duration: details.durationRaw || 'غير معروف',
-      channel: details.channel?.name || 'YouTube',
-      thumbnail: details.thumbnails?.[0]?.url || null,
-      requestedBy: 'عضو'
-    }];
+  let tracks;
+  if (/^https?:\/\/soundcloud\.com\//i.test(query)) {
+    tracks = [await soundcloud.tracks.get(query)];
+  } else {
+    const result = await soundcloud.tracks.search({ q: query });
+    tracks = Array.isArray(result) ? result : (result.collection || []);
   }
-
-  const results = await play.search(query, {
-    limit,
-    source: { youtube: 'video' }
-  });
-
-  return results.map(video => ({
-    id: video.id,
-    title: video.title,
-    url: video.url,
-    duration: video.durationRaw || 'غير معروف',
-    channel: video.channel?.name || 'YouTube',
-    thumbnail: video.thumbnails?.[0]?.url || null,
-    requestedBy: 'عضو'
-  }));
+  return tracks.filter(Boolean).slice(0, limit).map(normalizeSoundcloudTrack);
 }
 
 async function connectToVoice(interaction, queue) {
@@ -238,39 +242,14 @@ async function playNext(guildId) {
 
   queue.current = queue.songs.shift();
   try {
-    if (!youtubeClient) {
-      youtubeClient = await Innertube.create({
-        cache: new UniversalCache(false),
-        generate_session_locally: true
-      });
-    }
-
-    let youtubeStream;
-    let lastYoutubeError;
-    for (const clientType of ['WEB', 'ANDROID']) {
-      try {
-        youtubeStream = await youtubeClient.download(queue.current.id || queue.current.url, {
-          type: 'audio',
-          quality: 'best',
-          format: 'mp4',
-          client: clientType
-        });
-        console.log(`YouTube stream opened with ${clientType}.`);
-        break;
-      } catch (error) {
-        lastYoutubeError = error;
-        console.warn(`YouTube ${clientType} client failed: ${error.message}`);
-      }
-    }
-    if (!youtubeStream) throw lastYoutubeError || new Error('تعذر فتح بث يوتيوب');
-
+    const soundcloudStream = await soundcloud.util.streamTrack(queue.current.url);
     const ffmpeg = spawn(ffmpegPath, [
       '-hide_banner', '-loglevel', 'error',
       '-i', 'pipe:0',
       '-f', 's16le', '-ar', '48000', '-ac', '2', 'pipe:1'
     ], { stdio: ['pipe', 'pipe', 'ignore'] });
 
-    Readable.fromWeb(youtubeStream).pipe(ffmpeg.stdin);
+    soundcloudStream.pipe(ffmpeg.stdin);
     const resource = createAudioResource(ffmpeg.stdout, {
       inputType: 1,
       inlineVolume: true,
@@ -314,15 +293,7 @@ async function registerCommands() {
 client.once('ready', async () => {
   console.log(`Logged in as ${client.user.tag}`);
   client.user.setActivity('/play اسم الأغنية', { type: 2 });
-  try {
-    youtubeClient = await Innertube.create({
-      cache: new UniversalCache(false),
-      generate_session_locally: true
-    });
-    console.log('YouTube client ready.');
-  } catch (error) {
-    console.error('YouTube client initialization failed:', error.message);
-  }
+  console.log('SoundCloud client ready.');
   try { await registerCommands(); } catch (error) { console.error('Command registration failed:', error.message); }
 });
 
