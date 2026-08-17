@@ -1,7 +1,7 @@
 {
-  "name": "discord-music-bot",
+  "name": "discord-music-dashboard-bot",
   "version": "1.0.0",
-  "description": "Discord music bot with YouTube search, queue, embeds and buttons",
+  "description": "Discord music bot with OAuth2 dashboard, persistent voice channel, slash commands and queue controls.",
   "main": "index.js",
   "scripts": {
     "start": "node index.js"
@@ -10,10 +10,12 @@
     "node": ">=20.0.0"
   },
   "dependencies": {
-    "@discordjs/voice": "^0.18.0",
-    "discord.js": "^14.19.3",
-    "dotenv": "^16.5.0",
-    "ffmpeg-static": "^5.2.0",
-    "soundcloud.ts": "^0.7.4"
+    "@discordjs/voice": "^0.19.2",
+    "discord.js": "^14.27.0",
+    "dotenv": "^16.6.1",
+    "express": "^5.2.1",
+    "ffmpeg-static": "^5.3.0",
+    "opusscript": "^0.1.1",
+    "play-dl": "^1.9.7"
   }
 }
