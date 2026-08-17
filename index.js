@@ -105,7 +105,7 @@ async function connectToChannel(guild, channel) {
   if (!channel || !channel.isVoiceBased()) throw new Error('لم يتم العثور على روم صوتي صالح.');
   const state = getGuildState(guild.id);
   if (state.connection) state.connection.destroy();
-  state.connection = joinVoiceChannel({ channelId: channel.id, guildId: guild.id, adapterCreator: guild.voiceAdapterCreator, selfDeaf: true });
+  state.connection = joinVoiceChannel({ channelId: channel.id, guildId: guild.id, adapterCreator: guild.voiceAdapterCreator, selfDeaf: true, selfMute: false });
   state.connection.subscribe(state.player);
   state.connection.on(VoiceConnectionStatus.Disconnected, async () => {
     try { await Promise.race([entersState(state.connection, VoiceConnectionStatus.Signalling, 5000), entersState(state.connection, VoiceConnectionStatus.Connecting, 5000)]); }
@@ -181,7 +181,7 @@ async function playNext(guildId) {
     if (!YOUTUBE_COOKIE) throw new Error('YOUTUBE_COOKIE is missing in Render Environment Variables');
     const ytdlProcess = ytDlp.exec(playbackUrl, {
       output: '-',
-      format: 'bestaudio[ext=webm][acodec=opus]/bestaudio/best',
+      format: 'bestaudio/best',
       noPlaylist: true,
       quiet: true,
       noWarnings: true,
@@ -207,7 +207,9 @@ async function playNext(guildId) {
     resource.volume?.setVolume(Math.max(0, Math.min(1.5, state.volume / 100)));
     state.resource = resource;
     state.player.play(resource);
-    console.log(JSON.stringify({ event: 'audio_resource_started', guildId, title: track.title, demuxType: probed.type, volume: state.volume, connectionState: state.connection?.state?.status || 'unknown', audioBytes, timestamp: new Date().toISOString() }));
+    await entersState(state.player, AudioPlayerStatus.Playing, 10000);
+    const me = state.connection?.joinConfig?.guildId ? client.guilds.cache.get(guildId)?.members.me : null;
+    console.log(JSON.stringify({ event: 'audio_resource_started', guildId, title: track.title, demuxType: probed.type, volume: state.volume, connectionState: state.connection?.state?.status || 'unknown', playerState: state.player.state.status, serverMute: me?.voice?.serverMute || false, selfMute: me?.voice?.selfMute || false, audioBytes, timestamp: new Date().toISOString() }));
     if (state.textChannel) sendNowPlaying(state.textChannel, track).catch(() => {});
   } catch (error) {
     console.error(JSON.stringify({ event: 'playback_error', guildId, title: track.title, url: playbackUrl || track.url || null, error: error.stack || error.message, timestamp: new Date().toISOString() }));
