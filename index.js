@@ -178,7 +178,7 @@ async function playNext(guildId) {
       if (channel) await connectToChannel(guild, channel);
     }
     if (!YOUTUBE_COOKIE) throw new Error('YOUTUBE_COOKIE is missing in Render Environment Variables');
-    const ytdlProcess = ytDlp(playbackUrl, {
+    const ytdlProcess = ytDlp.exec(playbackUrl, {
       output: '-',
       format: 'bestaudio[ext=webm][acodec=opus]/bestaudio/best',
       noPlaylist: true,
