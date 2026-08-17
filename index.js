@@ -4,8 +4,9 @@ const fs = require('node:fs');
 const path = require('node:path');
 const crypto = require('node:crypto');
 const express = require('express');
-const play = require('play-dl');
-const ytdl = require('@distube/ytdl-core');
+const ytDlpPackage = require('yt-dlp-exec');
+const ytDlpPath = process.env.YT_DLP_PATH || path.join(__dirname, '.venv', 'bin', 'yt-dlp');
+const ytDlp = ytDlpPackage.create(ytDlpPath);
 const YouTube = require('youtube-sr').default;
 const ffmpegPath = require('ffmpeg-static');
 const {
@@ -50,9 +51,6 @@ if (!CLIENT_ID || !DISCORD_TOKEN || !CLIENT_SECRET) {
   process.exit(1);
 }
 
-if (YOUTUBE_COOKIE) {
-  play.setToken({ youtube: { cookie: YOUTUBE_COOKIE } });
-}
 
 const defaultConfig = { guildId: GUILD_ID, voiceChannelId: process.env.VOICE_CHANNEL_ID || '', stay24_7: true, volume: 100 };
 let config = defaultConfig;
@@ -180,13 +178,17 @@ async function playNext(guildId) {
       if (channel) await connectToChannel(guild, channel);
     }
     if (!YOUTUBE_COOKIE) throw new Error('YOUTUBE_COOKIE is missing in Render Environment Variables');
-    const audioStream = ytdl(playbackUrl, {
-      filter: 'audioonly',
-      quality: 'highestaudio',
-      highWaterMark: 1 << 25,
-      requestOptions: { headers: { cookie: YOUTUBE_COOKIE } },
+    const ytdlProcess = ytDlp(playbackUrl, {
+      output: '-',
+      format: 'bestaudio[ext=webm][acodec=opus]/bestaudio/best',
+      noPlaylist: true,
+      quiet: true,
+      noWarnings: true,
+      addHeader: `Cookie: ${YOUTUBE_COOKIE}`,
+      jsRuntimes: 'node',
     });
-    const probed = await demuxProbe(audioStream);
+    ytdlProcess.on('error', error => console.error(JSON.stringify({ event: 'yt_dlp_process_error', guildId, title: track.title, error: error.message, timestamp: new Date().toISOString() })));
+    const probed = await demuxProbe(ytdlProcess.stdout);
     const resource = createAudioResource(probed.stream, { inputType: probed.type || StreamType.Arbitrary, inlineVolume: true });
     resource.volume?.setVolume(Math.max(0, Math.min(1.5, state.volume / 100)));
     state.resource = resource;
