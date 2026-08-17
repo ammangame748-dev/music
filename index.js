@@ -5,6 +5,7 @@ const path = require('node:path');
 const crypto = require('node:crypto');
 const express = require('express');
 const play = require('play-dl');
+const YouTube = require('youtube-sr').default;
 const ffmpegPath = require('ffmpeg-static');
 const {
   Client,
@@ -134,17 +135,32 @@ function normalizeYouTubeUrl(value) {
 }
 async function resolveTrack(query, requestedBy) {
   const input = query.trim();
-  let url = normalizeYouTubeUrl(input);
-  if (!url) {
-    const results = await play.search(input, { limit: 5, source: { youtube: 'video' } });
-    const first = results.find(result => normalizeYouTubeUrl(result.url));
-    if (!first) throw new Error('لم أجد نتيجة YouTube صالحة لهذا البحث.');
-    url = normalizeYouTubeUrl(first.url);
+  const directUrl = normalizeYouTubeUrl(input);
+  if (directUrl) {
+    return { title: input, url: directUrl, duration: '??:??', thumbnail: null, requestedBy };
   }
-  if (play.yt_validate(url) !== 'video') throw new Error('رابط YouTube غير صالح. استخدم رابط watch أو اكتب اسم الأغنية.');
-  const info = await play.video_info(url);
-  const details = info.video_details;
-  return { title: details.title, url, duration: details.durationRaw || '??:??', thumbnail: details.thumbnails?.[0]?.url, requestedBy };
+  let video;
+  try {
+    video = await YouTube.searchOne(input);
+  } catch (error) {
+    console.error('YouTube search failed:', error.message);
+    throw new Error('تعذر البحث في YouTube حاليًا. جرّب بعد قليل أو أرسل رابط YouTube مباشر.');
+  }
+  const url = normalizeYouTubeUrl(video?.url || (video?.id ? `https://www.youtube.com/watch?v=${video.id}` : ''));
+  if (!video || !url) throw new Error('لم أجد فيديو YouTube صالحًا لهذا البحث.');
+  return { title: video.title || 'Unknown title', url, duration: video.durationFormatted || '??:??', thumbnail: video.thumbnail?.url, requestedBy };
+}
+function getPlaybackUrl(track) {
+  const raw = String(track?.url || '').trim();
+  const youtubeUrl = normalizeYouTubeUrl(raw);
+  if (youtubeUrl) return youtubeUrl;
+  try {
+    const parsed = new URL(raw);
+    if (!['http:', 'https:'].includes(parsed.protocol)) throw new Error('Only HTTP(S) URLs are supported');
+    return parsed.toString();
+  } catch {
+    throw new Error(`Invalid playback URL for track "${String(track?.title || 'unknown').slice(0, 120)}": ${raw.slice(0, 200) || '(empty)'}`);
+  }
 }
 async function playNext(guildId) {
   const state = getGuildState(guildId);
@@ -152,20 +168,23 @@ async function playNext(guildId) {
   const track = state.items.shift();
   if (!track) { state.current = null; return; }
   state.current = track;
+  let playbackUrl = '';
   try {
+    playbackUrl = getPlaybackUrl(track);
+    console.log(JSON.stringify({ event: 'playback_start', guildId, title: track.title, url: playbackUrl, timestamp: new Date().toISOString() }));
     if (!state.connection) {
       const guild = client.guilds.cache.get(guildId);
       const channel = guild?.channels.cache.get(config.voiceChannelId);
       if (channel) await connectToChannel(guild, channel);
     }
-    const stream = await play.stream(track.url, { quality: 2, discordPlayerCompatibility: true });
+    const stream = await play.stream(playbackUrl, { quality: 2, discordPlayerCompatibility: true });
     const resource = createAudioResource(stream.stream, { inputType: stream.type || StreamType.WebmOpus, inlineVolume: true });
     resource.volume?.setVolume(Math.max(0, Math.min(1.5, state.volume / 100)));
     state.resource = resource;
     state.player.play(resource);
     if (state.textChannel) sendNowPlaying(state.textChannel, track).catch(() => {});
   } catch (error) {
-    console.error('Playback error:', error.message);
+    console.error(JSON.stringify({ event: 'playback_error', guildId, title: track.title, url: playbackUrl || track.url || null, error: error.stack || error.message, timestamp: new Date().toISOString() }));
     if (state.textChannel) state.textChannel.send(`تعذر تشغيل **${track.title}**: ${error.message}`).catch(() => {});
     setTimeout(() => playNext(guildId), 1000);
   }
@@ -191,10 +210,11 @@ function queueText(state) {
   const lines = [];
   if (state.current) lines.push(`**يعمل الآن:** ${state.current.title} \`[${state.current.duration}]\``);
   state.items.slice(0, 15).forEach((t, i) => lines.push(`${i + 1}. ${t.title} \`[${t.duration}]\``));
-  return lines.length ? lines.join('\n') : 'القائمة فارغة.';
+  return lines.length ? lines.join('\\n') : 'القائمة فارغة.';
 }
 async function sendNowPlaying(channel, track) {
-  const embed = new EmbedBuilder().setColor(0x8b5cf6).setTitle(`🎵 ${track.title}`).setDescription(`تمت الإضافة بواسطة ${track.requestedBy}\n\`[${track.duration}]\``).setURL(track.url);
+  const embed = new EmbedBuilder().setColor(0x8b5cf6).setTitle(`🎵 ${track.title}`).setDescription(`تمت الإضافة بواسطة ${track.requestedBy}
+\`[${track.duration}]\``).setURL(track.url);
   if (track.thumbnail) embed.setThumbnail(track.thumbnail);
   await channel.send({ embeds: [embed], components: [controlsRow()] });
 }
@@ -208,7 +228,7 @@ async function handleMusicAction(interaction, action) {
   await interaction.reply({ content: action === 'loop' ? `التكرار: ${state.loop ? 'مفعّل' : 'معطّل'}` : 'تم تنفيذ الأمر.', ephemeral: true });
 }
 
-client.once('ready', async () => {
+client.once('clientReady', async () => {
   console.log(`Logged in as ${client.user.tag}`);
   const rest = new REST({ version: '10' }).setToken(DISCORD_TOKEN);
   try {
@@ -219,6 +239,15 @@ client.once('ready', async () => {
   if (config.stay24_7 && config.guildId && config.voiceChannelId) setTimeout(() => reconnectConfigured(config.guildId), 2000);
 });
 
+async function respondSafely(interaction, content) {
+  try {
+    if (interaction.deferred || interaction.replied) return await interaction.editReply({ content });
+    return await interaction.reply({ content, ephemeral: true });
+  } catch (error) {
+    console.error('Interaction response failed:', error.message);
+  }
+}
+
 client.on('interactionCreate', async interaction => {
   try {
     if (interaction.isButton() && interaction.customId.startsWith('music_')) return handleMusicAction(interaction, interaction.customId.replace('music_', ''));
@@ -226,9 +255,10 @@ client.on('interactionCreate', async interaction => {
     if (!interaction.guild) return interaction.reply({ content: 'هذا الأمر يعمل داخل السيرفر فقط.', ephemeral: true });
     const state = getGuildState(interaction.guildId);
     if (interaction.commandName === 'join') {
+      await interaction.deferReply();
       const channel = pickVoiceChannel(interaction, interaction.options.getChannel('channel'));
       await connectToChannel(interaction.guild, channel);
-      return interaction.reply(`دخلت إلى **${channel.name}**.`);
+      return interaction.editReply(`دخلت إلى **${channel.name}**.`);
     }
     if (interaction.commandName === 'play') {
       await interaction.deferReply();
@@ -242,12 +272,12 @@ client.on('interactionCreate', async interaction => {
     if (interaction.commandName === 'queue') return interaction.reply({ content: queueText(state), ephemeral: true });
     if (interaction.commandName === 'volume') { state.volume = interaction.options.getInteger('percent'); config.volume = state.volume; saveConfig(); if (state.resource?.volume) state.resource.volume.setVolume(state.volume / 100); return interaction.reply(`مستوى الصوت: **${state.volume}%**`); }
     if (interaction.commandName === 'leave') { state.items = []; state.current = null; state.player.stop(); state.connection?.destroy(); state.connection = null; return interaction.reply('خرجت من الروم.'); }
-    if (interaction.commandName === '247') { if (!memberIsAllowed(interaction)) return interaction.reply({ content: 'لا تملك صلاحية تغيير إعداد 24/7.', ephemeral: true }); config.stay24_7 = !config.stay24_7; saveConfig(); if (config.stay24_7) await reconnectConfigured(interaction.guildId); return interaction.reply(`وضع 24/7: **${config.stay24_7 ? 'مفعّل' : 'معطّل'}**`); }
+    if (interaction.commandName === '247') { if (!memberIsAllowed(interaction)) return interaction.reply({ content: 'لا تملك صلاحية تغيير إعداد 24/7.', ephemeral: true }); await interaction.deferReply(); config.stay24_7 = !config.stay24_7; saveConfig(); if (config.stay24_7) await reconnectConfigured(interaction.guildId); return interaction.editReply(`وضع 24/7: **${config.stay24_7 ? 'مفعّل' : 'معطّل'}**`); }
     if (interaction.commandName === 'panel') return interaction.reply({ embeds: [new EmbedBuilder().setColor(0x8b5cf6).setTitle('لوحة تحكم الموسيقى').setDescription('استخدم الأزرار للتحكم في التشغيل. استخدم `/play` لإضافة أغنية و`/queue` لعرض القائمة.')], components: [controlsRow()] });
   } catch (error) {
     console.error(error);
     const message = error.message || 'حدث خطأ غير متوقع.';
-    if (interaction.deferred) interaction.editReply(`❌ ${message}`).catch(() => {}); else if (!interaction.replied) interaction.reply({ content: `❌ ${message}`, ephemeral: true }).catch(() => {});
+    await respondSafely(interaction, `❌ ${message}`);
   }
 });
 
