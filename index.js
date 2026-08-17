@@ -177,14 +177,18 @@ async function playNext(guildId) {
       const guild = client.guilds.cache.get(guildId);
       const channel = guild?.channels.cache.get(config.voiceChannelId);
       if (channel) await connectToChannel(guild, channel);
+    } else {
+      await entersState(state.connection, VoiceConnectionStatus.Ready, 20000);
     }
     if (!YOUTUBE_COOKIE) throw new Error('YOUTUBE_COOKIE is missing in Render Environment Variables');
     const ytdlProcess = ytDlp.exec(playbackUrl, {
       output: '-',
-      format: 'bestaudio/best',
+      format: 'ba/b',
+      extractorArgs: 'youtube:player_client=android,web',
       noPlaylist: true,
       quiet: true,
       noWarnings: true,
+      ignoreConfig: true,
       addHeader: `Cookie: ${YOUTUBE_COOKIE}`,
       jsRuntimes: 'node',
     });
@@ -203,6 +207,9 @@ async function playNext(guildId) {
     ytdlProcess.on('close', (code, signal) => console.log(JSON.stringify({ event: 'yt_dlp_closed', guildId, title: track.title, code, signal, audioBytes, stderr: ytDlpStderr.trim().slice(-1000), timestamp: new Date().toISOString() })));
     ytdlProcess.stdout.pipe(measuredStream);
     const probed = await demuxProbe(measuredStream);
+    if (audioBytes === 0) {
+      throw new Error(`yt-dlp returned an empty audio stream. stderr: ${ytDlpStderr.trim().slice(-500) || 'no stderr'}`);
+    }
     const resource = createAudioResource(probed.stream, { inputType: probed.type || StreamType.Arbitrary, inlineVolume: true });
     resource.volume?.setVolume(Math.max(0, Math.min(1.5, state.volume / 100)));
     state.resource = resource;
