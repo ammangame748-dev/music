@@ -118,16 +118,33 @@ async function reconnectConfigured(guildId) {
   if (!guild || !channel || !config.stay24_7) return;
   try { await connectToChannel(guild, channel); } catch (e) { console.error('Reconnect failed:', e.message); }
 }
+function normalizeYouTubeUrl(value) {
+  try {
+    const parsed = new URL(String(value).trim());
+    const host = parsed.hostname.toLowerCase().replace(/^www\./, '').replace(/^m\./, '');
+    let videoId = '';
+    if (host === 'youtu.be') videoId = parsed.pathname.slice(1).split('/')[0];
+    else if (host === 'youtube.com' || host === 'music.youtube.com') {
+      if (parsed.pathname === '/watch') videoId = parsed.searchParams.get('v') || '';
+      else if (parsed.pathname.startsWith('/shorts/')) videoId = parsed.pathname.split('/')[2] || '';
+      else if (parsed.pathname.startsWith('/embed/')) videoId = parsed.pathname.split('/')[2] || '';
+    }
+    return videoId ? `https://www.youtube.com/watch?v=${encodeURIComponent(videoId)}` : null;
+  } catch { return null; }
+}
 async function resolveTrack(query, requestedBy) {
-  let url = query.trim();
-  if (!play.yt_validate(url)) {
-    const results = await play.search(url, { limit: 1, source: { youtube: 'video' } });
-    if (!results.length) throw new Error('لم أجد نتيجة لهذا البحث.');
-    url = results[0].url;
+  const input = query.trim();
+  let url = normalizeYouTubeUrl(input);
+  if (!url) {
+    const results = await play.search(input, { limit: 5, source: { youtube: 'video' } });
+    const first = results.find(result => normalizeYouTubeUrl(result.url));
+    if (!first) throw new Error('لم أجد نتيجة YouTube صالحة لهذا البحث.');
+    url = normalizeYouTubeUrl(first.url);
   }
+  if (play.yt_validate(url) !== 'video') throw new Error('رابط YouTube غير صالح. استخدم رابط watch أو اكتب اسم الأغنية.');
   const info = await play.video_info(url);
   const details = info.video_details;
-  return { title: details.title, url: details.url || url, duration: details.durationRaw || '??:??', thumbnail: details.thumbnails?.[0]?.url, requestedBy };
+  return { title: details.title, url, duration: details.durationRaw || '??:??', thumbnail: details.thumbnails?.[0]?.url, requestedBy };
 }
 async function playNext(guildId) {
   const state = getGuildState(guildId);
