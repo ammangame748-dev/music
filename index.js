@@ -5,6 +5,7 @@ const path = require('node:path');
 const crypto = require('node:crypto');
 const express = require('express');
 const play = require('play-dl');
+const ytdl = require('@distube/ytdl-core');
 const YouTube = require('youtube-sr').default;
 const ffmpegPath = require('ffmpeg-static');
 const {
@@ -29,6 +30,7 @@ const {
   entersState,
   NoSubscriberBehavior,
   StreamType,
+  demuxProbe,
 } = require('@discordjs/voice');
 
 const PORT = Number(process.env.PORT || 3000);
@@ -177,8 +179,15 @@ async function playNext(guildId) {
       const channel = guild?.channels.cache.get(config.voiceChannelId);
       if (channel) await connectToChannel(guild, channel);
     }
-    const stream = await play.stream(playbackUrl, { quality: 2, discordPlayerCompatibility: true });
-    const resource = createAudioResource(stream.stream, { inputType: stream.type || StreamType.WebmOpus, inlineVolume: true });
+    if (!YOUTUBE_COOKIE) throw new Error('YOUTUBE_COOKIE is missing in Render Environment Variables');
+    const audioStream = ytdl(playbackUrl, {
+      filter: 'audioonly',
+      quality: 'highestaudio',
+      highWaterMark: 1 << 25,
+      requestOptions: { headers: { cookie: YOUTUBE_COOKIE } },
+    });
+    const probed = await demuxProbe(audioStream);
+    const resource = createAudioResource(probed.stream, { inputType: probed.type || StreamType.Arbitrary, inlineVolume: true });
     resource.volume?.setVolume(Math.max(0, Math.min(1.5, state.volume / 100)));
     state.resource = resource;
     state.player.play(resource);
