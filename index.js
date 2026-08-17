@@ -3,6 +3,7 @@ require('dotenv').config();
 const fs = require('node:fs');
 const path = require('node:path');
 const crypto = require('node:crypto');
+const { Transform } = require('node:stream');
 const express = require('express');
 const ytDlpPackage = require('yt-dlp-exec');
 const ytDlpPath = process.env.YT_DLP_PATH || path.join(__dirname, '.venv', 'bin', 'yt-dlp');
@@ -187,12 +188,26 @@ async function playNext(guildId) {
       addHeader: `Cookie: ${YOUTUBE_COOKIE}`,
       jsRuntimes: 'node',
     });
+    let audioBytes = 0;
+    let ytDlpStderr = '';
+    const measuredStream = new Transform({
+      transform(chunk, encoding, callback) {
+        audioBytes += chunk.length;
+        callback(null, chunk);
+      },
+    });
+    ytdlProcess.stderr.on('data', chunk => {
+      ytDlpStderr = `${ytDlpStderr}${chunk.toString()}`.slice(-2000);
+    });
     ytdlProcess.on('error', error => console.error(JSON.stringify({ event: 'yt_dlp_process_error', guildId, title: track.title, error: error.message, timestamp: new Date().toISOString() })));
-    const probed = await demuxProbe(ytdlProcess.stdout);
+    ytdlProcess.on('close', (code, signal) => console.log(JSON.stringify({ event: 'yt_dlp_closed', guildId, title: track.title, code, signal, audioBytes, stderr: ytDlpStderr.trim().slice(-1000), timestamp: new Date().toISOString() })));
+    ytdlProcess.stdout.pipe(measuredStream);
+    const probed = await demuxProbe(measuredStream);
     const resource = createAudioResource(probed.stream, { inputType: probed.type || StreamType.Arbitrary, inlineVolume: true });
     resource.volume?.setVolume(Math.max(0, Math.min(1.5, state.volume / 100)));
     state.resource = resource;
     state.player.play(resource);
+    console.log(JSON.stringify({ event: 'audio_resource_started', guildId, title: track.title, demuxType: probed.type, volume: state.volume, connectionState: state.connection?.state?.status || 'unknown', audioBytes, timestamp: new Date().toISOString() }));
     if (state.textChannel) sendNowPlaying(state.textChannel, track).catch(() => {});
   } catch (error) {
     console.error(JSON.stringify({ event: 'playback_error', guildId, title: track.title, url: playbackUrl || track.url || null, error: error.stack || error.message, timestamp: new Date().toISOString() }));
